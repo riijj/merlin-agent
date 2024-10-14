@@ -4,7 +4,7 @@
 Merlin is a post-exploitation command and control framework.
 
 This file is part of Merlin.
-Copyright (C) 2023 Russel Van Tuyl
+Copyright (C) 2024 Russel Van Tuyl
 
 Merlin is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -36,10 +36,10 @@ import (
 	"golang.org/x/sys/windows"
 
 	// Internal
-	"github.com/Ne0nd0g/merlin-agent/cli"
-	"github.com/Ne0nd0g/merlin-agent/os/windows/api/advapi32"
-	"github.com/Ne0nd0g/merlin-agent/os/windows/api/user32"
-	"github.com/Ne0nd0g/merlin-agent/os/windows/pkg/pipes"
+	"github.com/Ne0nd0g/merlin-agent/v2/cli"
+	"github.com/Ne0nd0g/merlin-agent/v2/os/windows/api/advapi32"
+	"github.com/Ne0nd0g/merlin-agent/v2/os/windows/api/user32"
+	"github.com/Ne0nd0g/merlin-agent/v2/os/windows/pkg/pipes"
 )
 
 // LOGON32_LOGON_ constants from winbase.h

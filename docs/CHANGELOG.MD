@@ -4,7 +4,138 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
-## 2.0.0 - 2023-11-01
+## 2.4.2 - 2024-10-14
+
+### Fixed
+
+- Fixed [Issue 43](https://github.com/Ne0nd0g/merlin-agent/issues/43) - Added `fmt` import to FreeBSD shell
+
+### Changed
+
+- Check if Mythic client configuration contained a PSK for the Mythic `http` C2 profile
+- Upgraded the following libraries:
+  - golang.org/x/crypto v0.22.0 => v0.28.0
+  - golang.org/x/net v0.24.0 => v0.30.0
+  - golang.org/x/sys v0.19.0 => v0.26.0
+  - golang.org/x/text v0.14.0 => v0.19.0
+  - github.com/fatih/color v1.16.0 => v1.17.0
+  - github.com/quic-go/quic-go v0.42.0 => v0.47.0
+  - github.com/refraction-networking/utls v1.6.4 => v1.6.7
+
+## 2.4.1 - 2024-04-23
+
+### Changed
+
+- Upgraded golang.org/x/crypto v0.21.0 => v0.22.0
+- Upgraded golang.org/x/sys v0.18.0 => v0.19.0
+- Upgraded golang.org/x/mod v0.16.0 => v0.17.0
+- Upgraded golang.org/x/tools v0.19.0 => v0.20.0
+- Upgraded golang.org/x/exp v0.0.0-20240318143956-a85f2c67cd81 => v0.0.0-20240416160154-fe59bbe5cc7f
+- Upgraded github.com/google/pprof v0.0.0-20240320155624-b11c3daa6f07 => v0.0.0-20240422182052-72c8669ad3e7
+- Upgraded github.com/onsi/ginkgo/v2 v2.17.0 => v2.17.1
+- Upgraded github.com/klauspost/compress v1.17.7 => v1.17.8
+- Upgraded github.com/refraction-networking/utls v1.6.3 => v1.6.4
+- GoVulnCheck to use the latest version of Go
+
+### Security
+
+- [GO-2024-2687](https://pkg.go.dev/vuln/GO-2024-2687) - Upgraded `golang.org/x/net` to v0.24.0 to address CVE-2024-2687
+
+## 2.4.0 - 2024-03-23
+
+### Added
+
+- Mythic client handles multiple HTTP headers with the Mythic `http` C2 Profile
+- Automatic Windows HTTP proxy authentication through the `winhttp` API
+- Added the `-http-client` command line argument and `HTTPCLIENT` Makefile variable to specify which HTTP client to use
+  - Use `go` for the default Go HTTP client
+  - Use `winhttp` API for HTTP C2
+- Use `go build` tags to control which C2 clients are compiled into the agent. [Build Tags](https://merlin-c2.readthedocs.io/en/latest/agent/custom.html#build-tags)
+  - When ANY build tag is included, the agent will ONLY include that feature and nothing else. For example, if ONLY the http tag is provided, the SMB, TCP, and UDP clients will not be included.
+  - If one of the following build tags is used, then only the C2 profiles provided will be compiled in
+  - `http` - Include all HTTP clients (including HTTP/1.1, HTTP/2, and HTTP/3)
+  - `http1` - Include HTTP/1.1 client
+  - `http2` - Include HTTP/2 client
+  - `http3` - Include HTTP/3 client
+  - `winhttp` - Include Windows `winhttp` API client
+  - `mythic` - Include the Mythic client for the Mythic `http` C2 profile
+  - `smb` - Include SMB client
+  - `tcp` - Include TCP client
+  - `udp` - Include UDP client
+
+### Fixed
+
+- Resolved several SOCKS5 issues
+  - Updated Mythic client to handle `post_response` actions with `ServerPostResponse` structure to include SOCKS information
+  - Created a go routine and a channel just for sending SOCKS data in place of using the Jobs channel
+- [Issue 38](https://github.com/Ne0nd0g/merlin-agent/issues/38) - Added `evasion_386.go` to facilitate x86 Windows builds 
+
+### Changed
+
+- Upgraded the following libraries to their latest version
+  - upgraded golang.org/x/net v0.21.0 => v0.22.0
+  - upgraded github.com/google/uuid v1.5.0 => v1.6.0
+  - upgraded github.com/quic-go/quic-go v0.40.1 => v0.42.0
+  - upgraded github.com/refraction-networking/utls v1.6.0 => v1.6.3
+
+### Security
+
+- Upgraded go-jose/v3 to v3.0.3 to address CVE-2024-28180
+
+## 2.3.0 - 2023-12-26
+
+### Added
+
+- Support to decode Simplified Chinese (Code Page 936) encoding to UTF-8
+- Support to decode Traditional Chinese (Code Page 950) encoding to UTF-8
+- Support to decode Korean (Code Page 949) encoding to UTF-8
+- Added 'RSA' as a valid authentication method for Mythic EKE
+- Added 'mythic' encoder to transform messages in the format Mythic expects them in
+
+### Changed
+
+- Refactored clients/mythic to correctly implement the Client interface from merlin-agent/v2 package
+  - Moved encryption out of the client and into the transforms
+  - Accepts authenticator, transforms, and secure TLS configuration items
+- Upgraded:
+  - `github.com/Ne0nd0g/merlin-message` to v1.3.0
+  - `golang.org/x/net` to v0.19.0
+  - `github.com/quic-go/quic-go` to v0.40.1
+  - `github.com/refraction-networking/utls` to v1.6.0
+- Removed `GOGARBLE` environment variable from Makefile
+
+## 2.2.0 - 2023-12-14
+
+### Added
+
+- New `os/windows/pkg/text` package to detect and handle non UTF-8 encoding
+  - Only handles ShiftJIS at this moment
+  - Will replace non UTF-8 characters with a � character
+
+### Fixed
+
+- [Issue 33](https://github.com/Ne0nd0g/merlin-agent/issues/33) - Added handling for ShiftJIS encoding
+
+## 2.1.0 - 2023-11-27
+
+### Changed
+
+- Allow the TLS X509 certificate validation setting to be passed through to JA3 and Parrot clients
+- JA3 & Parrot HTTP transports use agent's `-secure` command line argument to determine if TLS X.509 certificate validation should be performed
+- Upgraded the following modules
+  - `golang.org/x/sys v0.13.0 => v0.14.0`
+  - `golang.org/x/net v0.17.0 => v0.18.0`
+  - `github.com/go-jose/go-jose/v3 v3.0.0 => v3.0.1`
+  - `github.com/fatih/color v1.15.0 => v1.16.0`
+  
+### Fixed
+
+- [Issue 26](https://github.com/Ne0nd0g/merlin-agent/issues/26) - uTLS package uses HTTP proxy if provided or from environment variables
+  - Implemented a custom dialer to connect to the proxy first and then the destination
+- uTLS package for correctly set the TLS version from the provided JA3 string
+
+
+## 2.0.0 - 2023-11-03
 
 ### Added
 
@@ -33,6 +164,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - GitHub Actions for building and testing the Merlin Agent
 - Implemented "services" and "repositories"
   - Services are: agent, client, job, message, and p2p
+- Configurable TLS x.509 certificate validation
+  - Default is `false`, TLS certificates are not validated
+  - Added `-secure` command line argument to require TLS X.509 certificate validation
+  - Added `SECURE` variable to Make file (e.g., `make windows SECURE=true`)
 
 ### Changed
 

@@ -2,7 +2,7 @@
 Merlin is a post-exploitation command and control framework.
 
 This file is part of Merlin.
-Copyright (C) 2023 Russel Van Tuyl
+Copyright (C) 2024 Russel Van Tuyl
 
 Merlin is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,15 +36,14 @@ import (
 	"github.com/google/shlex"
 	"github.com/google/uuid"
 
-	// Internal
-	"github.com/Ne0nd0g/merlin-agent/agent"
-	"github.com/Ne0nd0g/merlin-agent/clients"
-	"github.com/Ne0nd0g/merlin-agent/clients/http"
-	"github.com/Ne0nd0g/merlin-agent/clients/smb"
-	"github.com/Ne0nd0g/merlin-agent/clients/tcp"
-	"github.com/Ne0nd0g/merlin-agent/clients/udp"
-	"github.com/Ne0nd0g/merlin-agent/core"
-	"github.com/Ne0nd0g/merlin-agent/run"
+	"github.com/Ne0nd0g/merlin-agent/v2/agent"
+	"github.com/Ne0nd0g/merlin-agent/v2/clients"
+	"github.com/Ne0nd0g/merlin-agent/v2/clients/http"
+	"github.com/Ne0nd0g/merlin-agent/v2/clients/smb"
+	"github.com/Ne0nd0g/merlin-agent/v2/clients/tcp"
+	"github.com/Ne0nd0g/merlin-agent/v2/clients/udp"
+	"github.com/Ne0nd0g/merlin-agent/v2/core"
+	"github.com/Ne0nd0g/merlin-agent/v2/run"
 )
 
 // GLOBAL VARIABLES
@@ -52,14 +52,17 @@ import (
 // auth the authentication method the Agent will use to authenticate to the server
 var auth = "opaque"
 
-// addr the interface and port the agent will use for network connections
+// addr is the interface and port the agent will use for network connections
 var addr = "127.0.0.1:7777"
 
-// headers a list of HTTP headers the agent will use with the HTTP protocol to communicate with the server
+// headers is a list of HTTP headers that the agent will use with the HTTP protocol to communicate with the server
 var headers = ""
 
 // host a specific HTTP header used with HTTP communications; notably used for domain fronting
 var host = ""
+
+// httpClient is a string that represents what type of HTTP client the Agent should use (e.g., winhttp, go)
+var httpClient = "go"
 
 // ja3 a string that represents how the Agent should configure it TLS client
 var ja3 = ""
@@ -67,7 +70,7 @@ var ja3 = ""
 // killdate the date and time, as a unix epoch timestamp, that the agent will quit running
 var killdate = "0"
 
-// listener the UUID of the peer-to-peer listener this agent belongs to. Used with delegate messages
+// listener the UUID of the peer-to-peer listener this agent belongs to, used with delegate messages
 var listener = ""
 
 // maxretry the number of failed connections to the server before the agent will quit running
@@ -88,8 +91,19 @@ var protocol = "h2"
 // proxy the address of HTTP proxy to send HTTP traffic through
 var proxy = ""
 
+// proxyUser the username for proxy authentication
+var proxyUser = ""
+
+// proxyPass the password for proxy authentication
+var proxyPass = ""
+
 // psk is the Pre-Shared Key, the secret used to encrypt messages communications with the server
 var psk = "merlin"
+
+// secure a boolean value as a string that determines the value of the TLS InsecureSkipVerify option for HTTP
+// communications.
+// Must be a string, so it can be set from the Makefile
+var secure = "false"
 
 // sleep the amount of time the agent will sleep before it attempts to check in with the server
 var sleep = "30s"
@@ -118,9 +132,12 @@ func main() {
 	flag.StringVar(&psk, "psk", psk, "Pre-Shared Key used to encrypt initial communications")
 	flag.StringVar(&protocol, "proto", protocol, "Protocol for the agent to connect with [https (HTTP/1.1), http (HTTP/1.1 Clear-Text), h2 (HTTP/2), h2c (HTTP/2 Clear-Text), http3 (QUIC or HTTP/3.0), tcp-bind, tcp-reverse, udp-bind, udp-reverse, smb-bind, smb-reverse]")
 	flag.StringVar(&proxy, "proxy", proxy, "Hardcoded proxy to use for http/1.1 traffic only that will override host configuration")
+	flag.StringVar(&proxyUser, "proxy-user", proxyUser, "Username for proxy authentication")
+	flag.StringVar(&proxyPass, "proxy-pass", proxyPass, "Password for proxy authentication")
 	flag.StringVar(&host, "host", host, "HTTP Host header")
 	flag.StringVar(&ja3, "ja3", ja3, "JA3 signature string (not the MD5 hash). Overrides -proto & -parrot flags")
-	flag.StringVar(&parrot, "parrot", ja3, "parrot or mimic a specific browser from github.com/refraction-networking/utls (e.g., HelloChrome_Auto")
+	flag.StringVar(&parrot, "parrot", ja3, "parrot or mimic a specific browser from github.com/refraction-networking/utls (e.g., HelloChrome_Auto)")
+	flag.StringVar(&secure, "secure", secure, "Require TLS certificate validation for HTTP communications")
 	flag.StringVar(&sleep, "sleep", sleep, "Time for agent to sleep")
 	flag.StringVar(&skew, "skew", skew, "Amount of skew, or variance, between agent checkins")
 	flag.StringVar(&killdate, "killdate", killdate, "The date, as a Unix EPOCH timestamp, that the agent will quit running")
@@ -129,6 +146,7 @@ func main() {
 	flag.StringVar(&padding, "padding", padding, "The maximum amount of data that will be randomly selected and appended to every message")
 	flag.StringVar(&useragent, "useragent", useragent, "The HTTP User-Agent header string that the Agent will use while sending traffic")
 	flag.StringVar(&headers, "headers", headers, "A new line separated (e.g., \\n) list of additional HTTP headers to use")
+	flag.StringVar(&httpClient, "http-client", httpClient, "The HTTP client to use for communication [go, winhttp]")
 
 	flag.Usage = usage
 
@@ -175,6 +193,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Parse the secure flag
+	var verify bool
+	verify, err = strconv.ParseBool(secure)
+	if err != nil {
+		if *verbose {
+			color.Red(err.Error())
+		}
+		os.Exit(1)
+	}
+
 	// Get the client
 	var client clients.Client
 	var listenerID uuid.UUID
@@ -183,9 +211,12 @@ func main() {
 		clientConfig := http.Config{
 			AgentID:      a.ID(),
 			Protocol:     protocol,
+			ClientType:   httpClient,
 			Host:         host,
 			Headers:      headers,
 			Proxy:        proxy,
+			ProxyUser:    proxyUser,
+			ProxyPass:    proxyPass,
 			UserAgent:    useragent,
 			PSK:          psk,
 			JA3:          ja3,
@@ -194,6 +225,11 @@ func main() {
 			AuthPackage:  auth,
 			Opaque:       opaque,
 			Transformers: transforms,
+			InsecureTLS:  !verify,
+		}
+
+		if strings.ToLower(httpClient) == "winhttp" && strings.ToLower(protocol) == "h2" {
+			clientConfig.Protocol = "https"
 		}
 
 		if url != "" {
@@ -211,7 +247,7 @@ func main() {
 		listenerID, err = uuid.Parse(listener)
 		if err != nil {
 			if *verbose {
-				color.Red(err.Error())
+				color.Red(fmt.Sprintf("there was an error parsing the listener's UUID: %s", err))
 			}
 			os.Exit(1)
 		}
@@ -238,7 +274,7 @@ func main() {
 		listenerID, err = uuid.Parse(listener)
 		if err != nil {
 			if *verbose {
-				color.Red(err.Error())
+				color.Red(fmt.Sprintf("there was an error parsing the listener's UUID: %s", err))
 			}
 			os.Exit(1)
 		}
@@ -265,7 +301,7 @@ func main() {
 		listenerID, err = uuid.Parse(listener)
 		if err != nil {
 			if *verbose {
-				color.Red(err.Error())
+				color.Red(fmt.Sprintf("there was an error parsing the listener's UUID: %s", err))
 			}
 			os.Exit(1)
 		}

@@ -4,7 +4,7 @@
 Merlin is a post-exploitation command and control framework.
 
 This file is part of Merlin.
-Copyright (C) 2023 Russel Van Tuyl
+Copyright (C) 2024 Russel Van Tuyl
 
 Merlin is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -25,9 +25,13 @@ package pipes
 import (
 	// Standard
 	"fmt"
+	"unicode/utf8"
 
 	// X Packages
 	"golang.org/x/sys/windows"
+
+	// Internal
+	"github.com/Ne0nd0g/merlin-agent/v2/os/windows/pkg/text"
 )
 
 // CreateAnonymousPipes creates and returns a handle for STDIN, STDOUT, and STDERR
@@ -179,7 +183,18 @@ func ReadPipes(stdInRead, stdOutRead, stdErrRead windows.Handle) (stdin, stdout,
 				stdOutBuffer = append(stdOutBuffer, b)
 			}
 		}
-		stdout = string(stdOutBuffer)
+
+		// Convert the output to a string
+		if utf8.Valid(stdOutBuffer) {
+			stdout += string(stdOutBuffer)
+		} else {
+			s, e := text.DecodeString(stdOutBuffer)
+			if e != nil {
+				stderr = fmt.Sprintf("%s\n", e)
+			} else {
+				stdout += s
+			}
+		}
 	}
 
 	// STDERR
@@ -202,7 +217,18 @@ func ReadPipes(stdInRead, stdOutRead, stdErrRead windows.Handle) (stdin, stdout,
 				stdErrBuffer = append(stdErrBuffer, b)
 			}
 		}
-		stderr = string(stdErrBuffer)
+
+		// Convert the output to a string
+		if utf8.Valid(stdErrBuffer) {
+			stderr += string(stdErrBuffer)
+		} else {
+			s, e := text.DecodeString(stdErrBuffer)
+			if e != nil {
+				stderr = fmt.Sprintf("%s\n", e)
+			} else {
+				stderr += s
+			}
+		}
 	}
 
 	err = nil

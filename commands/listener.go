@@ -2,7 +2,7 @@
 Merlin is a post-exploitation command and control framework.
 
 This file is part of Merlin.
-Copyright (C) 2023 Russel Van Tuyl
+Copyright (C) 2024 Russel Van Tuyl
 
 Merlin is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -37,8 +37,8 @@ import (
 	"github.com/Ne0nd0g/merlin-message/jobs"
 
 	// Internal
-	"github.com/Ne0nd0g/merlin-agent/cli"
-	"github.com/Ne0nd0g/merlin-agent/p2p"
+	"github.com/Ne0nd0g/merlin-agent/v2/cli"
+	"github.com/Ne0nd0g/merlin-agent/v2/p2p"
 )
 
 const (

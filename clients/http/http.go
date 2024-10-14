@@ -1,10 +1,10 @@
-//go:build !mythic
+//go:build http || http1 || http2 || http3 || winhttp || mythic || !(smb || tcp || udp)
 
 /*
 Merlin is a post-exploitation command and control framework.
 
 This file is part of Merlin.
-Copyright (C) 2023 Russel Van Tuyl
+Copyright (C) 2024 Russel Van Tuyl
 
 Merlin is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -27,13 +27,10 @@ package http
 import (
 	// Standard
 	"bytes"
-	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"math/rand"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -45,43 +42,41 @@ import (
 	"github.com/go-jose/go-jose/v3"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/google/uuid"
-	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/http3"
-
-	// X-Packages
-	"golang.org/x/net/http2"
 
 	// Merlin Message
 	"github.com/Ne0nd0g/merlin-message"
 
 	// Internal
-	"github.com/Ne0nd0g/merlin-agent/authenticators"
-	"github.com/Ne0nd0g/merlin-agent/authenticators/none"
-	oAuth "github.com/Ne0nd0g/merlin-agent/authenticators/opaque"
-	"github.com/Ne0nd0g/merlin-agent/cli"
-	"github.com/Ne0nd0g/merlin-agent/clients/memory"
-	"github.com/Ne0nd0g/merlin-agent/clients/utls"
-	"github.com/Ne0nd0g/merlin-agent/core"
-	"github.com/Ne0nd0g/merlin-agent/services/p2p"
-	transformer "github.com/Ne0nd0g/merlin-agent/transformers"
-	"github.com/Ne0nd0g/merlin-agent/transformers/encoders/base64"
-	"github.com/Ne0nd0g/merlin-agent/transformers/encoders/gob"
-	"github.com/Ne0nd0g/merlin-agent/transformers/encoders/hex"
-	"github.com/Ne0nd0g/merlin-agent/transformers/encrypters/aes"
-	"github.com/Ne0nd0g/merlin-agent/transformers/encrypters/jwe"
-	"github.com/Ne0nd0g/merlin-agent/transformers/encrypters/rc4"
-	"github.com/Ne0nd0g/merlin-agent/transformers/encrypters/xor"
+	"github.com/Ne0nd0g/merlin-agent/v2/authenticators"
+	"github.com/Ne0nd0g/merlin-agent/v2/authenticators/none"
+	oAuth "github.com/Ne0nd0g/merlin-agent/v2/authenticators/opaque"
+	"github.com/Ne0nd0g/merlin-agent/v2/cli"
+	"github.com/Ne0nd0g/merlin-agent/v2/clients/memory"
+	"github.com/Ne0nd0g/merlin-agent/v2/core"
+	merlinHTTP "github.com/Ne0nd0g/merlin-agent/v2/http"
+	"github.com/Ne0nd0g/merlin-agent/v2/services/p2p"
+	transformer "github.com/Ne0nd0g/merlin-agent/v2/transformers"
+	"github.com/Ne0nd0g/merlin-agent/v2/transformers/encoders/base64"
+	"github.com/Ne0nd0g/merlin-agent/v2/transformers/encoders/gob"
+	"github.com/Ne0nd0g/merlin-agent/v2/transformers/encoders/hex"
+	"github.com/Ne0nd0g/merlin-agent/v2/transformers/encrypters/aes"
+	"github.com/Ne0nd0g/merlin-agent/v2/transformers/encrypters/jwe"
+	"github.com/Ne0nd0g/merlin-agent/v2/transformers/encrypters/rc4"
+	"github.com/Ne0nd0g/merlin-agent/v2/transformers/encrypters/xor"
 )
 
 // Client is a type of MerlinClient that is used to send and receive Merlin messages from the Merlin server
 type Client struct {
 	Authenticator authenticators.Authenticator
-	authenticated bool         // authenticated tracks if the Agent has successfully authenticated
-	Client        *http.Client // Client to send messages with
-	Protocol      string
+	authenticated bool              // authenticated tracks if the Agent has successfully authenticated
+	Client        merlinHTTP.Client // Client to send messages with
+	ClientType    merlinHTTP.Type
+	Protocol      string                    // Protocol contains the transportation protocol the agent is using (i.e., http2 or smb-reverse)
 	URL           []string                  // A slice of URLs to send messages to (e.g., https://127.0.0.1:443/test.php)
 	Host          string                    // HTTP Host header value
 	Proxy         string                    // Proxy string
+	ProxyUser     string                    // ProxyUser string
+	ProxyPass     string                    // ProxyPass string
 	JWT           string                    // JSON Web Token for authorization
 	Headers       map[string]string         // Additional HTTP headers to add to the request
 	secret        []byte                    // The secret key used to encrypt communications
@@ -93,17 +88,20 @@ type Client struct {
 	AgentID       uuid.UUID                 // AgentID the Agent's unique identifier
 	currentURL    int                       // the current URL the agent is communicating with
 	transformers  []transformer.Transformer // Transformers an ordered list of transforms (encoding/encryption) to apply when constructing a message
+	insecureTLS   bool                      // insecureTLS is a boolean that determines if the InsecureSkipVerify flag is set to true or false
 	sync.Mutex
 }
 
-// Config is a structure that is used to pass in all necessary information to instantiate a new Client
+// Config is a structure used to pass in all necessary information to instantiate a new Client
 type Config struct {
 	AgentID      uuid.UUID // AgentID the Agent's UUID
-	Protocol     string    // Protocol contains the transportation protocol the agent is using (i.e. http2 or http3)
+	Protocol     string    // Protocol contains the transportation protocol the agent is using (i.e., http2 or smb-reverse)
 	Host         string    // Host is used with the HTTP Host header for Domain Fronting activities
 	Headers      string    // Headers is a new-line separated string of additional HTTP headers to add to client requests
 	URL          []string  // URL is the protocol, domain, and page that the agent will communicate with (e.g., https://google.com/test.aspx)
 	Proxy        string    // Proxy is the URL of the proxy that all traffic needs to go through, if applicable
+	ProxyUser    string    // ProxyUser is the username for the proxy, if applicable
+	ProxyPass    string    // ProxyPass is the password for the proxy, if applicable
 	UserAgent    string    // UserAgent is the HTTP User-Agent header string that Agent will use while sending traffic
 	Parrot       string    // Parrot is a feature of the github.com/refraction-networking/utls to mimic a specific browser
 	PSK          string    // PSK is the Pre-Shared Key secret the agent will use to start authentication
@@ -112,22 +110,27 @@ type Config struct {
 	AuthPackage  string    // AuthPackage is the type of authentication the agent should use when communicating with the server
 	Opaque       []byte    // Opaque is the byte representation of the EnvU object used with the OPAQUE protocol (future use)
 	Transformers string    // Transformers is an ordered comma seperated list of transforms (encoding/encryption) to apply when constructing a message
+	InsecureTLS  bool      // InsecureTLS is a boolean that determines if the InsecureSkipVerify flag is set to true or false
+	ClientType   string    // ClientType is the type of WINDOWS http client to use (e.g., WinINet, WinHTTP, etc.)
 }
 
-// New instantiates and returns a Client that is constructed from the passed in Config
+// New instantiates and returns a Client constructed from the passed in Config
 func New(config Config) (*Client, error) {
 	cli.Message(cli.DEBUG, "Entering into clients.http.New()...")
 	cli.Message(cli.DEBUG, fmt.Sprintf("Config: %+v", config))
 	client := Client{
-		AgentID:   config.AgentID,
-		URL:       config.URL,
-		UserAgent: config.UserAgent,
-		Host:      config.Host,
-		Protocol:  config.Protocol,
-		Proxy:     config.Proxy,
-		JA3:       config.JA3,
-		Parrot:    config.Parrot,
-		psk:       config.PSK,
+		AgentID:     config.AgentID,
+		URL:         config.URL,
+		UserAgent:   config.UserAgent,
+		Host:        config.Host,
+		Protocol:    config.Protocol,
+		Proxy:       config.Proxy,
+		JA3:         config.JA3,
+		Parrot:      config.Parrot,
+		psk:         config.PSK,
+		insecureTLS: config.InsecureTLS,
+		ProxyUser:   config.ProxyUser,
+		ProxyPass:   config.ProxyPass,
 	}
 
 	// Authenticator
@@ -194,8 +197,12 @@ func New(config Config) (*Client, error) {
 	// Parse additional HTTP Headers
 	if config.Headers != "" {
 		client.Headers = make(map[string]string)
-		for _, header := range strings.Split(config.Headers, "\\n") {
+		for _, header := range strings.Split(config.Headers, "\n") {
 			h := strings.Split(header, ":")
+			if len(h) < 2 {
+				cli.Message(cli.DEBUG, fmt.Sprintf("unable to parse HTTP header: '%s'", header))
+				continue
+			}
 			// Remove leading or trailing spaces
 			headerKey := strings.TrimSuffix(strings.TrimPrefix(h[0], " "), " ")
 			headerValue := strings.TrimSuffix(strings.TrimPrefix(h[1], " "), " ")
@@ -212,14 +219,53 @@ func New(config Config) (*Client, error) {
 		}
 	}
 
+	// Determine the HTTP client type
+	if client.Protocol == "http" || client.Protocol == "https" {
+		if config.ClientType == strings.ToLower("winhttp") {
+			client.ClientType = merlinHTTP.WINHTTP
+		} else if config.ClientType == strings.ToLower("wininet") {
+			client.ClientType = merlinHTTP.WININET
+		} else {
+			client.ClientType = merlinHTTP.HTTP
+		}
+	}
+
+	if client.Protocol == "h2" || client.Protocol == "h2c" {
+		client.ClientType = merlinHTTP.HTTP2
+	}
+
+	if client.Protocol == "http3" {
+		client.ClientType = merlinHTTP.HTTP3
+	}
+
+	// If JA3 or Parrot was set, override the client type forcing HTTP/1.1 using the uTLS client
+	if client.JA3 != "" {
+		client.ClientType = merlinHTTP.JA3
+	} else if client.Parrot != "" {
+		client.ClientType = merlinHTTP.PARROT
+	}
+
+	// Build HTTP client config
+	httpConfig := merlinHTTP.Config{
+		ClientType: client.ClientType,
+		Insecure:   client.insecureTLS,
+		JA3:        client.JA3,
+		Parrot:     client.Parrot,
+		Protocol:   client.Protocol,
+		ProxyURL:   client.Proxy,
+		ProxyUser:  client.ProxyUser,
+		ProxyPass:  client.ProxyPass,
+	}
+
 	// Get the HTTP client
-	client.Client, err = getClient(client.Protocol, client.Proxy, client.JA3, client.Parrot)
+	client.Client, err = merlinHTTP.NewHTTPClient(httpConfig)
 	if err != nil {
 		return &client, err
 	}
 
 	cli.Message(cli.INFO, "Client information:")
 	cli.Message(cli.INFO, fmt.Sprintf("\tProtocol: %s", client.Protocol))
+	cli.Message(cli.INFO, fmt.Sprintf("\tHTTP Client Type: %s", client.ClientType))
 	cli.Message(cli.INFO, fmt.Sprintf("\tAuthenticator: %s", client.Authenticator))
 	cli.Message(cli.INFO, fmt.Sprintf("\tTransforms: %+v", client.transformers))
 	cli.Message(cli.INFO, fmt.Sprintf("\tURL: %v", client.URL))
@@ -237,112 +283,6 @@ func New(config Config) (*Client, error) {
 	return &client, nil
 }
 
-// getClient returns an HTTP client for the passed in protocol (i.e., h2 or http3)
-func getClient(protocol string, proxyURL string, ja3 string, parrot string) (*http.Client, error) {
-	cli.Message(cli.DEBUG, "Entering into clients.http.getClient()...")
-	cli.Message(cli.DEBUG, fmt.Sprintf("Protocol: %s, Proxy: %s, JA3 String: %s, Parrot: %s", protocol, proxyURL, ja3, parrot))
-	// Setup TLS configuration
-	TLSConfig := &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: true, // #nosec G402 - see https://github.com/Ne0nd0g/merlin/issues/59 TODO fix this
-		CipherSuites: []uint16{
-			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
-		},
-	}
-
-	// Proxy
-	var proxy func(*http.Request) (*url.URL, error)
-	if proxyURL != "" {
-		rawURL, errProxy := url.Parse(proxyURL)
-		if errProxy != nil {
-			return nil, fmt.Errorf("there was an error parsing the proxy string:\r\n%s", errProxy.Error())
-		}
-		cli.Message(cli.DEBUG, fmt.Sprintf("Parsed Proxy URL: %+v", rawURL))
-		proxy = http.ProxyURL(rawURL)
-	} else {
-		// Check for, and use, HTTP_PROXY, HTTPS_PROXY and NO_PROXY environment variables
-		proxy = http.ProxyFromEnvironment
-	}
-
-	// JA3
-	if ja3 != "" {
-		transport, err := utls.NewTransportFromJA3Insecure(ja3)
-		if err != nil {
-			return nil, err
-		}
-
-		// Set proxy
-		if proxyURL != "" {
-			transport.Proxy(proxy)
-		}
-		return &http.Client{Transport: transport}, nil
-	}
-
-	// Parrot - If a JA3 string was set, it will be used, and the parroting will be ignored
-	if parrot != "" {
-		// Build the transport
-		transport, err := utls.NewTransportFromParrotInsecure(parrot)
-		if err != nil {
-			return nil, err
-		}
-
-		// Set proxy
-		if proxyURL != "" {
-			transport.Proxy(proxy)
-		}
-		return &http.Client{Transport: transport}, nil
-	}
-
-	var transport http.RoundTripper
-	switch strings.ToLower(protocol) {
-	case "http3":
-		TLSConfig.NextProtos = []string{"h3"} // https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml#alpn-protocol-ids
-		transport = &http3.RoundTripper{
-			QuicConfig: &quic.Config{
-				// Opted for a long timeout to prevent the client from sending a PING Frame
-				// If MaxIdleTimeout is too high, agent will never get an error if the server is offline and will perpetually run without exiting because MaxFailedCheckins is never incremented
-				MaxIdleTimeout: time.Second * 30,
-				// KeepAlivePeriod will send an HTTP/2 PING frame to keep the connection alive
-				// If this isn't used, and the agent's sleep is greater than the MaxIdleTimeout, then the connection will time out
-				KeepAlivePeriod: time.Second * 30,
-				// HandshakeIdleTimeout is how long the client will wait to hear back while setting up the initial crypto handshake w/ server
-				HandshakeIdleTimeout: time.Second * 30,
-			},
-			TLSClientConfig: TLSConfig,
-		}
-	case "h2":
-		TLSConfig.NextProtos = []string{"h2"} // https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml#alpn-protocol-ids
-		transport = &http2.Transport{
-			TLSClientConfig: TLSConfig,
-		}
-	case "h2c":
-		transport = &http2.Transport{
-			AllowHTTP: true,
-			DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
-				return net.Dial(network, addr)
-			},
-		}
-	case "https":
-		TLSConfig.NextProtos = []string{"http/1.1"} // https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml#alpn-protocol-ids
-		transport = &http.Transport{
-			TLSClientConfig: TLSConfig,
-			MaxIdleConns:    10,
-			Proxy:           proxy,
-			IdleConnTimeout: 1 * time.Nanosecond,
-		}
-	case "http":
-		transport = &http.Transport{
-			MaxIdleConns:    10,
-			Proxy:           proxy,
-			IdleConnTimeout: 1 * time.Nanosecond,
-		}
-	default:
-		return nil, fmt.Errorf("%s is not a valid client protocol", protocol)
-	}
-	return &http.Client{Transport: transport}, nil
-}
-
 // getJWT is used to generate unauthenticated JWTs before the Agent successfully authenticates to the server
 func (client *Client) getJWT() (string, error) {
 	cli.Message(cli.DEBUG, "Entering into clients.http.getJWT()...")
@@ -354,7 +294,7 @@ func (client *Client) getJWT() (string, error) {
 	// Create encrypter
 	encrypter, encErr := jose.NewEncrypter(jose.A256GCM,
 		jose.Recipient{
-			Algorithm: jose.DIRECT, // Doesn't create a per message key
+			Algorithm: jose.DIRECT, // Doesn't create a per-message key
 			Key:       key[:]},
 		(&jose.EncrypterOptions{}).WithType("JWT").WithContentType("JWT"))
 	if encErr != nil {
@@ -397,8 +337,28 @@ func (client *Client) Listen() (returnMessages []messages.Base, err error) {
 	return
 }
 
-// Send takes in a Merlin message structure, performs any encoding or encryption, and sends it to the server
-// The function also decodes and decrypts response messages and return a Merlin message structure.
+func (client *Client) proxy() (err error) {
+	cli.Message(cli.DEBUG, fmt.Sprintf("clients/http.proxy(): Sending CONNECT request to proxy: %s", client.Proxy))
+	fmt.Printf("clients/http.proxy(): client.URL: %+v\n", client.URL[client.currentURL])
+
+	req, err := http.NewRequest("CONNECT", client.URL[client.currentURL], nil)
+	if err != nil {
+		err = fmt.Errorf("there was an error building the HTTP CONNECT request: %s", err)
+		return
+	}
+
+	var resp *http.Response
+	resp, err = client.Client.Do(req)
+	if err != nil {
+		err = fmt.Errorf("there was an error sending the HTTP CONNECT request: %s", err)
+		return
+	}
+	cli.Message(cli.DEBUG, fmt.Sprintf("clients/http.proxy(): HTTP CONNECT response: %+v", resp))
+	return
+}
+
+// Send takes in a Merlin message structure, performs any encoding or encryption, and sends it to the server.
+// The function also decodes and decrypts response messages and returns a Merlin message structure.
 // This is where the client's logic is for communicating with the server.
 func (client *Client) Send(m messages.Base) (returnMessages []messages.Base, err error) {
 	cli.Message(cli.DEBUG, fmt.Sprintf("clients/http.Send(): Entering into function with message: %+v", m))
@@ -469,15 +429,18 @@ func (client *Client) Send(m messages.Base) (returnMessages []messages.Base, err
 				e = "Building new HTTP/3 client because received QUIC CONNECTION_CLOSE frame with NO_ERROR transport error code"
 			}
 
-			// Handshake timeout happens when a new client was not able to reach the server and setup a crypto handshake for the first time (no listener or no access)
+			// Handshake timeout happens when a new client was not able to reach the server and set up a crypto handshake for the first time (no listener or no access)
 			if strings.Contains(err.Error(), "NO_ERROR: Handshake did not complete in time") {
 				n = true
 				e = "Building new HTTP/3 client because QUIC HandshakeTimeout reached"
 			}
 
-			// No recent network activity happens when a PING timeout occurs.  KeepAlive setting can be used to prevent MaxIdleTimeout
-			// When the client has previously established a crypto handshake but does not hear back from it's PING frame the server within the client's MaxIdleTimeout
-			// Typically happens when the Merlin Server application is killed/quit without sending a CONNECTION_CLOSE frame from stopping the listener
+			// No recent network activity happens when a PING timeout occurs.
+			// KeepAlive setting can be used to prevent MaxIdleTimeout.
+			// When the client has previously established a crypto handshake, but does not hear back from its PING frame,
+			// the server within the client's MaxIdleTimeout.
+			// Typically, it happens when the Merlin Server application is killed/quit without sending a
+			// CONNECTION_CLOSE frame from stopping the listener.
 			if strings.Contains(err.Error(), "NO_ERROR: No recent network activity") {
 				n = true
 				e = "Building new HTTP/3 client because QUIC MaxIdleTimeout reached"
@@ -488,7 +451,18 @@ func (client *Client) Send(m messages.Base) (returnMessages []messages.Base, err
 			if n {
 				cli.Message(cli.NOTE, e)
 				var errClient error
-				client.Client, errClient = getClient(client.Protocol, "", "", "")
+				// Build HTTP client config
+				httpConfig := merlinHTTP.Config{
+					ClientType: client.ClientType,
+					Insecure:   client.insecureTLS,
+					JA3:        client.JA3,
+					Parrot:     client.Parrot,
+					Protocol:   client.Protocol,
+					ProxyURL:   client.Proxy,
+					ProxyUser:  client.ProxyUser,
+					ProxyPass:  client.ProxyPass,
+				}
+				client.Client, errClient = merlinHTTP.NewHTTPClient(httpConfig)
 				if errClient != nil {
 					cli.Message(cli.WARN, fmt.Sprintf("there was an error getting a new HTTP/3 client: %s", errClient.Error()))
 				}
@@ -508,6 +482,10 @@ func (client *Client) Send(m messages.Base) (returnMessages []messages.Base, err
 		if err != nil {
 			cli.Message(cli.WARN, fmt.Sprintf("clients/http.Send(): there was an error generating a self-signed JWT: %s", err))
 		}
+		return
+	case 407:
+		cli.Message(cli.NOTE, "Server returned a 407 - Proxy Authentication Required, trying again...")
+		cli.Message(cli.DEBUG, fmt.Sprintf("Proxy-Authenticate header: %s", resp.Header.Get("Proxy-Authenticate")))
 		return
 	default:
 		err = fmt.Errorf("there was an error communicating with the server:\r\n%d", resp.StatusCode)
@@ -552,7 +530,7 @@ func (client *Client) Send(m messages.Base) (returnMessages []messages.Base, err
 		return
 	}
 
-	// Update the Agent's JWT if one was returned by the server in the response message
+	// Update the Agent's JWT if the server returned one in the response message
 	if respMessage.Token != "" {
 		client.JWT = respMessage.Token
 	}
@@ -561,7 +539,7 @@ func (client *Client) Send(m messages.Base) (returnMessages []messages.Base, err
 	return
 }
 
-// Set is a generic function that is used to modify a Client's field values
+// Set is a generic function used to modify a Client's field values
 func (client *Client) Set(key string, value string) (err error) {
 	cli.Message(cli.DEBUG, fmt.Sprintf("clients/http.Set(): entering into function with key: %s, value: %s", key, value))
 	defer cli.Message(cli.DEBUG, fmt.Sprintf("clients/http.Set(): exiting function with err: %v", err))
@@ -582,28 +560,61 @@ func (client *Client) Set(key string, value string) (err error) {
 			}
 		}
 		client.URL = urls
-		client.Client, err = getClient(client.Protocol, client.Proxy, client.JA3, client.Parrot)
+		// Build HTTP client config
+		httpConfig := merlinHTTP.Config{
+			ClientType: client.ClientType,
+			Insecure:   client.insecureTLS,
+			JA3:        client.JA3,
+			Parrot:     client.Parrot,
+			Protocol:   client.Protocol,
+			ProxyURL:   client.Proxy,
+			ProxyUser:  client.ProxyUser,
+			ProxyPass:  client.ProxyPass,
+		}
+		client.Client, err = merlinHTTP.NewHTTPClient(httpConfig)
 	case "ja3":
 		ja3String := strings.Trim(value, "\"'")
-		client.Client, err = getClient(client.Protocol, client.Proxy, ja3String, client.Parrot)
 		if ja3String != "" {
 			cli.Message(cli.NOTE, fmt.Sprintf("Set agent JA3 signature to:%s", ja3String))
 		} else if ja3String == "" {
 			cli.Message(cli.NOTE, fmt.Sprintf("Setting agent client back to default using %s protocol", client.Protocol))
 		}
 		client.JA3 = ja3String
+		// Build HTTP client config
+		httpConfig := merlinHTTP.Config{
+			ClientType: client.ClientType,
+			Insecure:   client.insecureTLS,
+			JA3:        client.JA3,
+			Parrot:     client.Parrot,
+			Protocol:   client.Protocol,
+			ProxyURL:   client.Proxy,
+			ProxyUser:  client.ProxyUser,
+			ProxyPass:  client.ProxyPass,
+		}
+		client.Client, err = merlinHTTP.NewHTTPClient(httpConfig)
 	case "jwt":
 		// TODO Parse the JWT to make sure it is valid first
 		client.JWT = value
 	case "parrot":
 		parrot := strings.Trim(value, "\"'")
-		client.Client, err = getClient(client.Protocol, client.Proxy, client.JA3, parrot)
 		if parrot != "" {
 			cli.Message(cli.NOTE, fmt.Sprintf("Set agent HTTP transport parrot to:%s", parrot))
 		} else if parrot == "" {
 			cli.Message(cli.NOTE, fmt.Sprintf("Setting agent client back to default using %s protocol", client.Protocol))
 		}
 		client.Parrot = parrot
+		// Build HTTP client config
+		httpConfig := merlinHTTP.Config{
+			ClientType: client.ClientType,
+			Insecure:   client.insecureTLS,
+			JA3:        client.JA3,
+			Parrot:     client.Parrot,
+			Protocol:   client.Protocol,
+			ProxyURL:   client.Proxy,
+			ProxyUser:  client.ProxyUser,
+			ProxyPass:  client.ProxyPass,
+		}
+		client.Client, err = merlinHTTP.NewHTTPClient(httpConfig)
 	case "paddingmax":
 		client.PaddingMax, err = strconv.Atoi(value)
 	case "secret":
@@ -614,7 +625,7 @@ func (client *Client) Set(key string, value string) (err error) {
 	return
 }
 
-// Get is a generic function that is used to retrieve the value of a Client's field
+// Get is a generic function used to retrieve the value of a Client's field
 func (client *Client) Get(key string) (value string) {
 	cli.Message(cli.DEBUG, fmt.Sprintf("clients/http.Get(): entering into function with key: %s", key))
 	defer cli.Message(cli.DEBUG, fmt.Sprintf("clients/http.Get(): leaving function with value: %s", value))
@@ -682,7 +693,7 @@ func (client *Client) Authenticate(msg messages.Base) (err error) {
 			return
 		}
 
-		// Add response message to the next loop iteration
+		// Add a response message to the next loop iteration
 		if len(msgs) > 0 {
 			msg = msgs[0]
 		}
@@ -701,7 +712,7 @@ func (client *Client) Construct(msg messages.Base) (data []byte, err error) {
 	cli.Message(cli.DEBUG, fmt.Sprintf("clients/http.Construct(): Transformers: %+v", client.transformers))
 	for i := len(client.transformers); i > 0; i-- {
 		if i == len(client.transformers) {
-			// First call should always take a Base message
+			// The first call should always take a Base message
 			data, err = client.transformers[i-1].Construct(msg, client.secret)
 			cli.Message(cli.DEBUG, fmt.Sprintf("%d call with transform %s - Constructed data(%d) %T: %X\n", i, client.transformers[i-1], len(data), data, data))
 		} else {
@@ -751,7 +762,8 @@ func (client *Client) Deconstruct(data []byte) (messages.Base, error) {
 }
 
 // Initial contains all the steps the agent and/or the communication profile need to take to set up and initiate
-// communication with server. If the agent needs to authenticate before it can send messages, that process will occur here.
+// communication with the server.
+// If the agent needs to authenticate before it can send messages, that process will occur here.
 func (client *Client) Initial() (err error) {
 	cli.Message(cli.DEBUG, "clients/http.Initial(): entering into function")
 	return client.Authenticate(messages.Base{})

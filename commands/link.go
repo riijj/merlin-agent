@@ -2,7 +2,7 @@
 Merlin is a post-exploitation command and control framework.
 
 This file is part of Merlin.
-Copyright (C) 2023 Russel Van Tuyl
+Copyright (C) 2024 Russel Van Tuyl
 
 Merlin is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -41,10 +41,10 @@ import (
 	"github.com/Ne0nd0g/merlin-message/jobs"
 
 	// Internal
-	"github.com/Ne0nd0g/merlin-agent/cli"
-	"github.com/Ne0nd0g/merlin-agent/core"
-	"github.com/Ne0nd0g/merlin-agent/p2p"
-	p2pService "github.com/Ne0nd0g/merlin-agent/services/p2p"
+	"github.com/Ne0nd0g/merlin-agent/v2/cli"
+	"github.com/Ne0nd0g/merlin-agent/v2/core"
+	"github.com/Ne0nd0g/merlin-agent/v2/p2p"
+	p2pService "github.com/Ne0nd0g/merlin-agent/v2/services/p2p"
 )
 
 // peerToPeerService is used to work with peer-to-peer Agent connections/link to include handling or getting Delegate messages

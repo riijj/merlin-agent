@@ -4,7 +4,7 @@
 Merlin is a post-exploitation command and control framework.
 
 This file is part of Merlin.
-Copyright (C) 2023 Russel Van Tuyl
+Copyright (C) 2024 Russel Van Tuyl
 
 Merlin is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -32,16 +32,18 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"unicode/utf8"
 	"unsafe"
 
 	// X Packages
 	"golang.org/x/sys/windows"
 
 	// Sub Repositories
-	"github.com/Ne0nd0g/merlin-agent/os/windows/api/kernel32"
-	"github.com/Ne0nd0g/merlin-agent/os/windows/api/ntdll"
-	"github.com/Ne0nd0g/merlin-agent/os/windows/pkg/pipes"
-	"github.com/Ne0nd0g/merlin-agent/os/windows/pkg/tokens"
+	"github.com/Ne0nd0g/merlin-agent/v2/os/windows/api/kernel32"
+	"github.com/Ne0nd0g/merlin-agent/v2/os/windows/api/ntdll"
+	"github.com/Ne0nd0g/merlin-agent/v2/os/windows/pkg/pipes"
+	"github.com/Ne0nd0g/merlin-agent/v2/os/windows/pkg/text"
+	"github.com/Ne0nd0g/merlin-agent/v2/os/windows/pkg/tokens"
 )
 
 // executeCommand instruct an agent to execute a program on the host operating system
@@ -71,10 +73,20 @@ func executeCommandWithAttributes(name string, args []string, attr *syscall.SysP
 		stdout = fmt.Sprintf("Created %s process with an ID of %d\n", application, cmd.Process.Pid)
 	}
 
-	stdout += string(out)
+	// Convert the output to a string
+	if utf8.Valid(out) {
+		stdout += string(out)
+	} else {
+		s, e := text.DecodeString(out)
+		if e != nil {
+			stderr = fmt.Sprintf("%s\n", e)
+		} else {
+			stdout += s
+		}
+	}
 
 	if err != nil {
-		stderr = err.Error()
+		stderr += err.Error()
 	}
 
 	return stdout, stderr
@@ -656,7 +668,7 @@ func getProcess(name string, pid uint32) (string, uint32, error) {
 	}
 
 	snapshotHandle, err := syscall.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
-	if snapshotHandle < 0 || err != nil {
+	if int(snapshotHandle) < 0 || err != nil {
 		return "", 0, fmt.Errorf("there was an error creating the snapshot:\r\n%s", err)
 	}
 	defer syscall.CloseHandle(snapshotHandle)

